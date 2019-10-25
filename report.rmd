@@ -360,18 +360,21 @@ model %>%tidy()%>%
 
 ```
 
-```{r fig.align="center",warning=FALSE,message=FALSE, fig.width=15,fig.height=13}
+```{r fig.align="center",warning=FALSE,message=FALSE}
   
-   tidy(model) %>%
-   filter(p.value<0.05) %>%
-   arrange(estimate,statistic) %>%
-  ggplot(aes(term,estimate,color=estimate))+
-  geom_point()+
-  geom_text(aes(label = term),vjust="inward",hjust="inward", check_overlap = TRUE)+
-  theme(axis.title.x=element_blank(),
-        axis.text.x=element_blank(),
-        axis.ticks.x=element_blank())+
-  labs(title='What categories are predictive of a healthy score?')
+ tidy(model) %>%
+  filter(p.value<0.05) %>%
+  arrange(estimate,statistic) %>%
+  group_by(direction = ifelse(estimate < 0, "Negative", "Positive")) %>%
+  top_n(16, abs(estimate)) %>%
+  ungroup() %>%
+  mutate(word = fct_reorder(term, estimate)) %>%
+  ggplot(aes(word, estimate, fill = direction)) +
+  geom_col() +
+  coord_flip() +
+  labs(x = "",
+       y = "Estimated effect of the category on the healthy score",
+       title = "What categories are predictive of a healthy score?")
 
 ```
 
@@ -382,6 +385,7 @@ We could see that lasagna, omelet, soy, sausage, bacon, milk/cream, and other ta
 ------
 
 
-* Tidytext mining and UDPipe materials used for preparing this page.
+Tidytext mining and UDPipe materials used for preparing this page.
+
 
 [Back to Github page](https://github.com/dbs700/) 
