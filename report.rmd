@@ -1,0 +1,386 @@
+---
+title: "Applying different NLP approaches to identify patterns in textual data. Epicurious dataset - recipes with rating and nutrition."
+
+author: "by Dmitrii Storozhenko"
+date: "2019-10-25"
+
+output: 
+  html_document:
+          code_folding: hide
+          df_print: paged
+          
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+Sys.setlocale("LC_ALL", "english")
+```
+
+
+
+Data: over 20000 recipes listed by recipe rating, nutritional information, and assigned category. You may find it on Kaggle -https://www.kaggle.com/hugodarwood/epirecipes 
+
+Task: build a model that can answer the following questions:
+
+
+1. What are the top 10 ingredients that are the healthiest? 
+2. What is a perfect recipe in terms of healthy and rating? 
+3. What are the worst categories in terms of health?
+
+
+```{r fig.align="center", warning=FALSE,message=FALSE, echo=FALSE}
+library(tidyverse)
+library(jsonlite)
+library(data.table)
+library(readr)
+
+
+
+setwd("C:/Users/storo/Downloads/epirecipes")
+options(scipen=999)
+theme_set(theme_light())
+
+epi_r <- read_csv("epi_r.csv")
+df<-fromJSON("full_format_recipes.json",flatten = FALSE)
+
+#summary
+sum<-as.data.frame(summary(epi_r))
+
+```
+
+This dataset is the perfect example of data that needs to be cleaned. We have whitespaces, duplicates, outliers, different titles with the same recipes and ingredients, etc.
+
+```{r fig.align="center",warning=FALSE,message=FALSE, echo=FALSE}
+#At first let's clean the JSON data
+
+#dealing with json lists
+ingredientscombine <- function(s)
+{
+  a <- unlist(s)
+  return(paste0(a, collapse = '',sep=' '))
+}
+
+df$ingredients <- sapply(df$ingredients,ingredientscombine)
+
+#take a look on JSON
+df
+
+```
+
+
+Preprocessing data:
+
+```{r warning=FALSE,message=FALSE, echo=FALSE}
+
+#clean duplicated variables by the same ingredients
+df<-unique(setDT(df), by = c("ingredients"))
+
+#clean from NA
+df <- filter(df, !is.na(df$title))
+df <- filter(df, !is.na(df$rating))
+df <- filter(df, !is.na(df$calories))
+df <- filter(df, !is.na(protein))
+df <- filter(df, !is.na(fat))
+df <- filter(df, !is.na(sodium))
+
+#select only values bigger than zero
+df <- filter(df, rating > 0)
+df <- filter(df, calories > 0)
+df <- filter(df, (fat + protein + sodium) > 0)
+
+#create categories column
+df <- df %>%
+  separate_rows(categories, sep = " ") 
+
+#remove whitespaces and get a tidy look
+df$title<-str_trim(df$title)
+df$title<-str_replace_all(df$title, "[[:punct:]]", " ")
+df$title<-gsub("\\s+"," ",df$title)
+df$ingredients<- str_replace_all(df$ingredients, "[^[:alnum:]]", " ")
+df$ingredients<- gsub('[[:digit:]]+', '', df$ingredients)
+df$ingredients<-str_trim(df$ingredients)
+df$ingredients<-gsub("\\s+"," ",df$ingredients)
+
+
+#repeat the same steps for the main data file
+
+epi_r<-unique(setDT(epi_r), by = c("title", "rating"))
+
+epi_r <- filter(epi_r, !is.na(epi_r$title))
+epi_r <- filter(epi_r, !is.na(epi_r$rating))
+epi_r <- filter(epi_r, !is.na(epi_r$calories))
+epi_r <- filter(epi_r, !is.na(protein))
+epi_r <- filter(epi_r, !is.na(fat))
+epi_r <- filter(epi_r, !is.na(sodium))
+epi_r <- filter(epi_r, rating > 0)
+epi_r <- filter(epi_r, calories > 0)
+epi_r <- filter(epi_r, (fat + protein + sodium) > 0)  
+epi_r$title<-str_trim(epi_r$title)
+epi_r$title<-str_replace_all(epi_r$title, "[[:punct:]]", " ")
+epi_r$title<-gsub("\\s+"," ",epi_r$title)
+
+#add ingredients column to main data source from JSON
+epi_r$ingredients<-df$ingredients[match(epi_r$title, df$title)]
+
+```
+
+
+The first thing that we would do is to see what are the most popular ingredients. We'll try to implement a tidytext approach and create a network graph based on the most frequent words.
+
+```{r fig.align="center",warning=FALSE,message=FALSE}
+library(tidytext)
+#create stopwords vocabulary
+tm_stopwords <- c(tm::stopwords("english"), "tablespoon", "teaspoon", "fresh", "1", "2","3","4","cup","tablespoons","chopped",
+                  "teaspoons", "cups","sliced","inch") 
+tm_stop <- data_frame(word = tm_stopwords)
+
+#We filter only by healthy category as othesr like "low sugar" or "gluten free" represents exactly the same ingredients
+df_title <- epi_r %>% 
+  filter(healthy=="1")%>%
+  #filter(rating>=5)%>%
+  mutate(title = str_replace_all(title, "https?://t.co/[A-ZZa-z\\d]+[0-9]|&amp;!»", "")) %>%
+  unnest_tokens(word, title,token = "words") %>% 
+  anti_join(tm_stop)
+
+#what are the most common keywords?
+df_title %>%
+  count(word, sort = TRUE)
+
+```
+
+
+As a next step, let’s see which words commonly occur together in the title and ingredients as well.
+
+```{r fig.align="center",warning=FALSE,message=FALSE}
+library(widyr)
+
+title_word_pairs <- df_title %>% 
+  pairwise_count(word, ingredients, sort = TRUE, upper = FALSE)
+
+title_word_pairs
+
+```
+
+
+Let’s plot networks of these co-occurring words so we can see these relationships better and identify the most healthy.
+
+```{r fig.align="center",warning=FALSE,message=FALSE}
+library(ggplot2)
+library(igraph)
+library(ggraph)
+
+set.seed(1234)
+title_word_pairs %>%
+  filter(n >= 7) %>%
+  #top_n(10)%>%
+  graph_from_data_frame() %>%
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(edge_alpha = n, edge_width = n), edge_colour = "cyan4") +
+  geom_node_point(size = 5) +
+  geom_node_text(aes(label = name), repel = TRUE, 
+                 point.padding = unit(0.2, "lines")) +
+  theme_void()
+
+```
+
+We see some apparent clustering in this network of words. We could see that different variations of vegetables, salad, chicken soup, cabbage slaw, goat cheese, sea bass, roasted pepper, radish, snap peas are the most healthy ingredients. We can use tf-idf, the term frequency times inverse document frequency, to identify words that are especially important to a document within a collection of documents.
+
+One measure of how important a word maybe is its term frequency (tf), how frequently a word occurs in a document. Another approach is to look at a term’s inverse document frequency (idf), which decreases the weight for commonly used words and increases the weight for words that are not used very much in a collection of documents. This can be combined with term frequency to calculate a term’s tf-idf (the two quantities multiplied together), the frequency of a term adjusted for how rarely it is used.
+
+```{r fig.align="center",warning=FALSE,message=FALSE}
+
+df_desc <- epi_r %>% 
+  #filter(healthy=="1")%>%
+  mutate(ingredients = str_replace_all(ingredients, "[0-9]+https?://t.co/[A-ZZa-z\\d]+[0-9]|&amp;!»", "")) %>%
+  unnest_tokens(word, ingredients,token = "words") %>% 
+  anti_join(tm_stop)
+
+desc_tf_idf <- df_desc %>% 
+  filter(healthy=="1")%>%
+  count(title, word, sort = TRUE) %>%
+  ungroup() %>%
+  bind_tf_idf(word, title, n)
+
+desc_tf_idf %>%
+  filter(n==1)%>%
+  arrange(desc(tf_idf))
+
+
+```
+
+
+So this is a <b>recipes that are healthy</b>, got the most significant rating, and chosen by importance within a collection of documents.
+
+```{r}
+desc_tf_idf <- full_join(desc_tf_idf, epi_r, by = "title")
+
+#top recipes by rating and ingredients
+desc_tf_idf %>%
+  filter(healthy=="1")%>%
+  group_by(title)%>%
+  summarise(median(rating))%>%
+  ungroup()
+```
+
+
+But what are the tastiest in terms of rating and <b>least healthies recipes</b> in our dataset based on TF-IDF word ingredient importance?
+
+```{r fig.align="center",warning=FALSE,message=FALSE}
+desc_tf_idf <- df_desc %>% 
+  filter(healthy=="1")%>%
+  count(title, word, sort = TRUE) %>%
+  ungroup() %>%
+  bind_tf_idf(word, title, n)
+
+desc_tf_idf <- full_join(desc_tf_idf, epi_r, by = "title")
+
+desc_tf_idf %>%
+  filter(healthy=="0")%>%
+  group_by(title,word)%>%
+  #arrange(desc(rating))
+  summarise(median(rating))%>%
+  ungroup()
+
+```
+
+
+The previous approach is suitable for exploratory data analysis, but how can we identify ingredients more accurately? It's evident that this type of data based on details written by hundreds of people with different writing styles, so we cannot extract targeted words based on its place in a document or something like this. For this purpose, we breakdown text data into single words and classify it with UDPipe. We'll try to identify only nouns as it seems to be logical for an ingredient in terms of word types in our data. 
+
+UDPipe provides language-agnostic tokenization, tagging, lemmatization, and dependency parsing of raw text, which is an essential part of natural language processing.
+The techniques used explained in detail in the paper: "Tokenizing, POS Tagging, Lemmatizing and Parsing UD 2.0 with UDPipe", available at http://ufal.mff.cuni.cz/~straka/papers/2017-conll_udpipe.pdf. In that paper, you'll also find accuracies on different languages and process flow speed (measured in words per second).
+
+```{r fig.align="center",warning=FALSE,message=FALSE}
+library(udpipe)
+library(textrank)
+
+#select only healthy recipes
+epi_r1<- epi_r %>%
+  filter(healthy=="1")
+
+## take the English udpipe model and annotate the text. 
+ud_model <- udpipe_download_model(language = "english")
+ud_model <- udpipe_load_model(ud_model$file_model)
+x <- udpipe_annotate(ud_model, x = epi_r1$ingredients)
+x <- as.data.frame(x)
+
+```
+
+
+What is really impressing is that UDPipe pre-trained models build on Universal Dependencies treebanks are made available for more than 64 languages based on 97 treebanks. 
+
+```{r fig.align="center",warning=FALSE,message=FALSE}
+#Look on noun words
+
+stats <- subset(x, upos %in% "NOUN")
+stats <- txt_freq(x = stats$lemma)
+library(lattice)
+stats$key <- factor(stats$key, levels = rev(stats$key))
+
+stats %>%
+  head(30)%>%
+  ggplot(aes(key,freq))+
+  geom_col(fill="cyan4")+
+  coord_flip()+
+  labs(title = "Most occurring nouns")
+
+```
+
+Look on noun phrases:
+
+```{r fig.align="center",warning=FALSE,message=FALSE}
+
+## Using a sequence of POS tags (noun phrases / verb phrases)
+x$phrase_tag <- as_phrasemachine(x$upos, type = "upos")
+stats <- keywords_phrases(x = x$phrase_tag, term = tolower(x$token), 
+                          pattern = "(A|N)*N(P+D*(A|N)*N)*", 
+                          is_regex = TRUE, detailed = FALSE)
+stats <- subset(stats, ngram > 1 & freq > 3)
+stats$key <- factor(stats$keyword, levels = rev(stats$keyword))
+
+stats %>%
+  head(30)%>%
+  ggplot(aes(key,freq))+
+  geom_col(fill="cyan4")+
+  coord_flip()+
+  labs(title = "Keywords - simple noun phrases")
+
+```
+
+
+We also could implement a built-in RAKE algorithm. RAKE is a basic algorithm that tries to identify keywords in text. Keywords are defined as a sequence of words following one another.
+The algorithm goes as follows:
+
+- candidate keywords extracted by looking to a contiguous sequence of words which do not contain irrelevant words
+
+- a score is being calculated for each word which is part of any candidate keyword; this is done by
+
+a) among the words of the candidate keywords, the algorithm looks how many times each word is occurring and how many times it co-occurs with other words
+
+b) each word gets a score which is the ratio of the word degree (how many times it co-occurs with other words) to the word frequency
+
+- a RAKE score for the full candidate keyword is calculated by summing up the scores of each of the words which define the candidate keyword
+
+The resulting keywords returned as dataframe together with their RAKE score.
+
+```{r fig.align="center",warning=FALSE,message=FALSE}
+
+## Using RAKE
+stats <- keywords_rake(x = x, term = "lemma", group = "doc_id", 
+                       relevant = x$upos %in% c("NOUN", "NOUN"))
+stats$key <- factor(stats$keyword, levels = rev(stats$keyword))
+
+stats %>%
+  head(30)%>%
+  ggplot(aes(key,rake))+
+  geom_col(fill="cyan4")+
+  coord_flip()+
+  labs(title = "Keywords identified by RAKE")
+
+```
+
+
+Let's see the relation between ingredients, categories, fat, sodium, and rating with a regression model. This is another approach that could help us to identify the pattern. Firstly we need to get a different data format by gathering main values and categories.
+
+```{r fig.align="center",warning=FALSE,message=FALSE}
+  
+#Creating a model that would identify relationship between variables
+
+library(broom)
+
+
+model <- epi_r %>%
+  select(-title,-ingredients,-fat,-calories,-sodium,-protein) %>%
+  lm(healthy ~ ., data = .)
+
+
+model %>%tidy()%>%
+  filter(p.value<0.05) %>%
+  arrange(estimate,statistic)
+
+```
+
+```{r fig.align="center",warning=FALSE,message=FALSE, fig.width=15,fig.height=13}
+  
+   tidy(model) %>%
+   filter(p.value<0.05) %>%
+   arrange(estimate,statistic) %>%
+  ggplot(aes(term,estimate,color=estimate))+
+  geom_point()+
+  geom_text(aes(label = term),vjust="inward",hjust="inward", check_overlap = TRUE)+
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())+
+  labs(title='What categories are predictive of a healthy score?')
+
+```
+
+We could see that lasagna, omelet, soy, sausage, bacon, milk/cream, and other tasty things are not healthy. That makes sense:) We also identified that different variations of vegetables, salad, chicken soup, cabbage slaw, goat cheese, sea bass, roasted pepper, radish, snap peas are the most healthy ingredients based on our data set.
+
+
+
+------
+
+
+* Tidytext mining and UDPipe materials used for preparing this page.
+
+[Back to Github page](https://github.com/dbs700/) 
