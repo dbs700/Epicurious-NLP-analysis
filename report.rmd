@@ -1,3 +1,4 @@
+
 ---
 title: "Applying different NLP approaches to identify patterns in textual data. Epicurious dataset - recipes with rating and nutrition."
 
@@ -374,7 +375,7 @@ model %>%tidy()%>%
 
 ```
 
-We could see that lasagna, omelet, soy, sausage, bacon, milk/cream, and other tasty things are not healthy. That makes sense:) We also identified that different variations of vegetables, salad, chicken soup, cabbage slaw, goat cheese, sea bass, roasted pepper, radish, snap peas are the most healthy ingredients based on our data set.
+We could see that lasagna, omelet, soy, sausage, bacon, milk/cream, and other tasty things are not healthy. That makes sense:) We also identified that different variations of vegetables, salad, chicken soup, cabbage slaw, goat cheese, sea bass, roasted pepper, radish, snap peas are the most healthy ingredients based on our data set. We could also apply the glove word embeddings technique for targeting specific words and collocations. Still, for the sake of simplicity of this report, I decided not to include it here.
 
 
 
